@@ -2,6 +2,9 @@ package dji.sampleV5.moduleaircraft.models
 
 import android.R
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
+import android.util.Log
 import android.widget.ArrayAdapter
 import androidx.lifecycle.MutableLiveData
 import com.google.android.gms.common.ConnectionResult
@@ -24,6 +27,7 @@ import dji.v5.manager.areacode.AreaCode
 import dji.v5.manager.areacode.AreaCodeManager
 import dji.v5.utils.common.ContextUtil
 import dji.v5.utils.common.DjiSharedPreferencesManager
+import dji.v5.utils.common.ToastUtils
 import io.reactivex.rxjava3.android.schedulers.AndroidSchedulers
 import io.reactivex.rxjava3.core.Flowable
 import io.reactivex.rxjava3.disposables.Disposable
@@ -42,8 +46,11 @@ class WayPointV3VM : DJIViewModel() {
     var compassHeadKey : DJIKey<Double> = FlightControllerKey.KeyCompassHeading.create()
     var altitudeKey :DJIKey<Double> = FlightControllerKey.KeyAltitude.create()
 
+    var missionPath: String = ""
 
     fun pushKMZFileToAircraft( missionPath: String) {
+        this.missionPath = missionPath
+
         WaypointMissionManager.getInstance().pushKMZFileToAircraft( missionPath, object :
             CommonCallbacks.CompletionCallbackWithProgress<Double> {
             override fun onProgressUpdate(progress: Double) {
@@ -66,6 +73,32 @@ class WayPointV3VM : DJIViewModel() {
 
     private fun refreshMissionState() {
         missionUploadState.postValue(missionUploadState.value)
+
+        // I've rewired this method to immediately call startMission once the missionUploadState
+        // has changed to "Mission Upload Success". I've also added a Handler to ensure that startMission
+        // is called on the main thread in an effort to fix the problem, however, it doesn't fix it.
+        // PROBLEM: The problem is that attempting to call startMission after the upload is reported
+        // as a success, startMission fails with this error:
+        // D/DJISAMPLE: startMission ERROR: ErrorImp{errorType='WAYPOINT', errorCode='CANT_EXCUTE_IN_CURRENT_STATUS', innerCode='-1', description='Unable to perform task. Device status error', hint=''}
+        if (missionUploadState.value?.tips.equals("Mission Upload Success")) {
+            Log.d("DJISAMPLE","Mission Upload Successful - now calling startMission)")
+            Log.d("DJISAMPLE", "Entry Thread: " + Thread.currentThread())
+            Handler(Looper.getMainLooper()).post(Runnable {
+                Log.d("DJISAMPLE", "startMission Thread: " + Thread.currentThread())
+                WaypointMissionManager.getInstance()
+                    .startMission(missionPath, object : CommonCallbacks.CompletionCallback {
+                        override fun onSuccess() {
+                            Log.d("DJISAMPLE","startMission SUCCESS")
+                            ToastUtils.showToast("startMission Success")
+                        }
+
+                        override fun onFailure(error: IDJIError) {
+                            Log.d("DJISAMPLE","startMission ERROR: " + error.toString())
+                            ToastUtils.showToast("startMission Failed " + error.toString())
+                        }
+                    })
+            })
+        }
     }
 
     fun startMission(missionId: String,  waylineIDs:List<Int> , callback: CommonCallbacks.CompletionCallback) {
